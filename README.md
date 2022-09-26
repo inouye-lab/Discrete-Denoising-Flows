@@ -1,3 +1,9 @@
+# Modifications to Discrete Denoising Flows
+
+The code in this repo is modified from the original repo such that the data loaded in experiments usinging DDF and DTF match exactly. We also restrict the use to linear layers.
+
+Below is the README as published by the original repo
+
 # Discrete Denoising Flows
 
 This repository contains the code for the experiments presented in the paper [_Discrete Denoising
