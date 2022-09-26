@@ -1,6 +1,8 @@
 # Modifications to Discrete Denoising Flows
 
 The code in this repo is modified from the original repo such that the data loaded in experiments usinging DDF and DTF match exactly. We also restrict the use to linear layers.
+For running all exps presented in DTF with the same paramteres, run ./run_ddf.sh 
+SNP and Mushroom datasets need to be added to data/datasets/
 
 Below is the README as published by the original repo
 
