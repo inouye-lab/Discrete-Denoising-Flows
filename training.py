@@ -3,20 +3,22 @@ import os.path
 
 import torch
 import numpy as np
+import time
 
 from data.cityscapes.cityscapes import get as get_cityscapes
 from data.eightgaussians import get_eightgaussians
-from data.mnist import get_mnist_loaders
+from data.mnist import get_mnist_loaders, get_binary_mnist_loaders, get_snp_loaders,get_mushroom_loaders, get_cop_loaders
 from model.categorical_prior import CategoricalPrior, CategoricalSplitPrior, log_prior
 from model.flow import Flow
 from model.flow_layers import Squeeze, Permutation, Coupling
 from model.model import Model
 from model.network import NN
-from visualization import save_grid_image, plot_2D_samples
+from visualization import save_grid_image, plot_2D_samples,plot_mnist_samples
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
+torch.manual_seed(42)
+#torch.set_num_threads(1)
 
 class Training:
     """
@@ -50,11 +52,24 @@ class Training:
         if args.dataset == 'mnist':
             self.train_loader, self.test_loader = get_mnist_loaders(args.batch_size)
             self.dimensionality = 4
+        elif args.dataset == 'mnist_folds':
+            self.train_loader, self.test_loader = get_binary_mnist_loaders(args.batch_size, args.kfolds, args.current_fold)
+            self.dimensionality = 2
+        elif args.dataset == 'genetic_folds':
+            self.train_loader, self.test_loader = get_snp_loaders(args.batch_size, args.kfolds, args.current_fold)
+            self.dimensionality = 2
+        elif args.dataset == 'mushroom_folds':
+            self.train_loader, self.test_loader = get_mushroom_loaders(args.batch_size, args.kfolds, args.current_fold)
+            self.dimensionality = 2
+        elif args.dataset == 'coph' or args.dataset == 'copm' or args.dataset == 'copw' or args.dataset == 'copn':
+            self.train_loader, self.test_loader = get_cop_loaders(args.dataset,args.batch_size, args.kfolds, args.current_fold, args.device)
+            self.dimensionality = 2
         elif args.dataset == 'cityscapes':
             self.train_loader, _, self.test_loader = get_cityscapes(args.batch_size)
             self.dimensionality = 4
         elif args.dataset == '8gaussians':
-            self.train_loader = self.test_loader = get_eightgaussians(args.num_classes, args.batch_size)
+            self.train_loader, self.test_loader = get_eightgaussians(args.num_classes, args.batch_size, args.kfolds, args.current_fold)
+            
             self.dimensionality = 2
         else:
             raise ValueError
@@ -99,6 +114,7 @@ class Training:
         Train one coupling layer network
         """
         split_idx = self.n_channels - (self.n_channels // 2)
+
         net = NN(args,
                  c_in=split_idx * self.num_classes,
                  c_out=(self.n_channels - split_idx) * self.num_classes,
@@ -115,13 +131,19 @@ class Training:
                 if self.dataset == 'mnist':
                     (data_batch, _) = data_batch
 
+                if(args.DEBUG):
+                    print("train_net:data batch is")
+                    print(data_batch)
                 x, _, _ = self.flow(data_batch.to(args.device))
-
+                if(args.DEBUG):
+                    print("train_net:x is (after applying flow to data batch, which is a permutation layer)")
+                    print(x)
+                
                 x1 = x[:, :split_idx]
                 x2 = x[:, split_idx:]
 
                 p_x2_given_x1 = net(x1)
-
+                              
                 loss = criterion(p_x2_given_x1, x2.long())
 
                 # backward + update
@@ -141,6 +163,7 @@ class Training:
         """
         Train categorical prior distribution
         """
+        
         logger.info("train prior")
         prior = CategoricalPrior([self.n_channels, self.height, self.width], self.num_classes, self.dimensionality).to(
             args.device)
@@ -150,13 +173,14 @@ class Training:
         for epoch in range(args.prior_epochs):
 
             running_loss = 0.0
+            running_loss_2 = 0.0
             for data_batch in self.train_loader:
 
                 if self.dataset == 'mnist':
                     (data_batch, _) = data_batch
 
                 z, pys, ys = self.flow(data_batch.to(args.device))
-
+ 
                 log_pz = prior.log_prior(z)
 
                 for py, y in zip(pys, ys):
@@ -171,10 +195,11 @@ class Training:
                 optimizer.step()
 
                 running_loss += bpd.item()
+                running_loss_2 += loss.item()
 
-            logger.info('[%d] Loss: %.3f BPD' % (epoch + 1, running_loss / len(self.train_loader)))
+            logger.info('[%d] Loss: %.3f BPD %.3f NLL' % (epoch + 1, running_loss / len(self.train_loader), running_loss_2 / len(self.train_loader)))
             running_loss = 0.0
-
+            running_loss_2 = 0.0
         logger.info('#' * 20 + '\n')
         return prior
 
@@ -218,7 +243,8 @@ class Training:
             prior.eval()
 
             running_loss = 0.0
-
+            running_loss_2 = 0.0
+            
             for data_batch in self.test_loader:
 
                 if self.dataset == 'mnist':
@@ -236,8 +262,10 @@ class Training:
                 bpd = loss / np.prod(self.input_size) / np.log(2)
 
                 running_loss += bpd.item()
+                running_loss_2 += loss.item()
 
-            logger.info('EVALUATION: %.3f BPD' % (running_loss / len(self.test_loader)))
+            logger.info('EVALUATION: %.3f BPD %.3f NLL' % (running_loss / len(self.test_loader), running_loss_2 / len(self.test_loader)))
+            args.test_losses.append(running_loss_2 / len(self.test_loader))
 
         return
 
@@ -245,15 +273,45 @@ class Training:
         """
         Train a single coupling layer on two dimensional toy data
         """
-        self.add_coupling_layer(args)
+       
+        total_train_time = 0
+        total_test_time = 0
+        
+        for i in range(0,args.num_coupling):
+            logger.info('Adding coupling %d',(i+1))
+            start_time = time.time()
+            self.add_coupling_layer(args)
+            end_time = time.time()
+            train_time_coupling = end_time - start_time
+            logger.info('Training Network took %.3f seconds',(train_time_coupling))
+            
+            # train prior to get current BPD
+            start_time = time.time()
+            prior = self.train_prior(args)
+            end_time = time.time()
+            train_time_prior = end_time - start_time 
 
-        # train prior to get current BPD
-        prior = self.train_prior(args)
-        self.evaluate(prior, args)
+            logger.info('Training Prior took %.3f seconds',(train_time_prior))
+            total_train_time += train_time_coupling + train_time_prior
+            logger.info('Total training time took %.3f seconds',(train_time_coupling+train_time_prior))
 
-        model = Model(self.flow, prior)
-        if self.save_plots:
+            start_time = time.time()
+            self.evaluate(prior, args)
+            end_time = time.time()
+            total_test_time = end_time - start_time
+            logger.info('Evaluating took %.3f seconds',(end_time-start_time))
+
+            model = Model(self.flow, prior)      
+        pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)   
+        args.train_times.append(total_train_time)
+        args.test_times.append(total_test_time)
+        args.total_params.append(pytorch_total_params)        
+        
+        if self.save_plots and self.dataset=='8_gaussians':
             plot_2D_samples(os.path.join(self.plots_dir, "8_gaussians_df.png"), model, 5000, 91)
+        elif self.save_plots and self.dataset=='mnist_folds':
+            plot_mnist_samples(os.path.join(self.plots_dir, "mnist_folds.png"), model, 25, 2)
+        
         if self.save_model:
             logger.info("make model")
             torch.save(model, os.path.join(self.model_dir, 'model_final'))

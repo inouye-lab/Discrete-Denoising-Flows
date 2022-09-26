@@ -61,3 +61,28 @@ def plot_2D_samples(path, model, num_samples, vocab_size):
                interpolation="nearest")
     plt.tight_layout()
     plt.gcf().savefig(path, dpi=250)
+    
+    
+def plot_mnist_samples(path, model, num_samples, vocab_size):
+    """
+    Sample (num_samples) 2D samples from model and plot them as a 2D histogram
+    """
+    samples = model.sample(num_samples)
+    
+    num_row = 5
+    num_col = 5
+    
+    fig, axes = plt.subplots(num_row, num_col, figsize=(3*num_col,4*num_row))
+    n,d = samples.size()
+
+    new_d = int(np.sqrt(d))
+    
+    for i in range(25):
+        img = np.reshape(samples[i,:],(new_d,new_d))
+        ax = axes[i//num_col, i%num_col]
+        ax.matshow(img, cmap='gray')
+    plt.tight_layout()
+    fig.show()
+
+    plt.gcf().savefig(path, dpi=250)
+    
