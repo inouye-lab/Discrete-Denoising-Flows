@@ -1,5 +1,6 @@
 import logging
 import random
+import utilities
 
 import numpy as np
 import torch
@@ -37,7 +38,8 @@ def sample_quantized_gaussian_mixture(batch_size):
 class EightGaussiansDataset(data.Dataset):
     def __init__(self, length, vocab_size):
         # create data
-        self.tensors = sample_quantized_gaussian_mixture(length)
+        #self.tensors = sample_quantized_gaussian_mixture(length)
+        self.tensors = utilities.sample_quantized_gaussian_mixture(length)
         self.indv_samples = torch.from_numpy(np.unique(self.tensors, axis=0)).float()
         self.length = length
         self.vocab_size = vocab_size
@@ -51,7 +53,10 @@ class EightGaussiansDataset(data.Dataset):
         return self.length
 
 
-def get_eightgaussians(num_classes, batch_size):
-    train_dataset = EightGaussiansDataset(10_000, num_classes)
-    trainloader = data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    return trainloader
+def get_eightgaussians(num_classes, batch_size, kfolds, current_fold):
+
+    all_dataset = utilities.sample_quantized_gaussian_mixture(12800)
+    train_dataset, test_dataset = utilities.create_X_train_test(all_dataset,0.8,kfolds,current_fold) 
+    trainloader = data.DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
+    testloader = data.DataLoader(test_dataset, batch_size=1, shuffle=False)
+    return trainloader, testloader
